@@ -2,74 +2,18 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import {
+  buildCsv,
+  computeStats,
+  flatten,
+  formatDate,
+} from "@/lib/aggregate";
 import { clearRecords, deleteRecord, loadRecords } from "@/lib/storage";
 import type { ReportRecord } from "@/lib/types";
 
-interface FlatRow {
-  recordId: string;
-  createdAt: string;
-  studentName: string;
-  schoolYear: string;
-  term: string;
-  subject: string;
-  rating: string;
-}
-
-function flatten(records: ReportRecord[]): FlatRow[] {
-  const rows: FlatRow[] = [];
-  for (const r of records) {
-    for (const s of r.subjects) {
-      rows.push({
-        recordId: r.id,
-        createdAt: r.createdAt,
-        studentName: r.studentName ?? "",
-        schoolYear: r.schoolYear ?? "",
-        term: r.term ?? "",
-        subject: s.subject,
-        rating: s.rating,
-      });
-    }
-  }
-  return rows;
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  return `${d.getFullYear()}/${String(d.getMonth() + 1).padStart(2, "0")}/${String(
-    d.getDate(),
-  ).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes(),
-  ).padStart(2, "0")}`;
-}
-
-/** CSV セルのエスケープ */
-function csvCell(value: string): string {
-  if (/[",\n]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
-}
-
-function downloadCsv(rows: FlatRow[]): void {
-  const header = ["保存日時", "氏名", "学年", "学期", "科目", "評定"];
-  const lines = [header.join(",")];
-  for (const row of rows) {
-    lines.push(
-      [
-        formatDate(row.createdAt),
-        row.studentName,
-        row.schoolYear,
-        row.term,
-        row.subject,
-        row.rating,
-      ]
-        .map(csvCell)
-        .join(","),
-    );
-  }
+function downloadCsv(csv: string): void {
   // Excel で文字化けしないよう BOM 付き UTF-8 で出力
-  const blob = new Blob(["﻿" + lines.join("\r\n")], {
+  const blob = new Blob(["﻿" + csv], {
     type: "text/csv;charset=utf-8;",
   });
   const url = URL.createObjectURL(blob);
@@ -91,34 +35,7 @@ export default function DashboardPage() {
   }, []);
 
   const rows = useMemo(() => flatten(records), [records]);
-
-  // 数値評定の平均と評定ごとの件数を集計
-  const stats = useMemo(() => {
-    const numericRatings = rows
-      .map((r) => r.rating.trim())
-      .filter((s) => s !== "" && Number.isFinite(Number(s)))
-      .map((s) => Number(s));
-    const avg =
-      numericRatings.length > 0
-        ? numericRatings.reduce((a, b) => a + b, 0) / numericRatings.length
-        : null;
-
-    const distribution = new Map<string, number>();
-    for (const r of rows) {
-      const key = r.rating.trim() || "（空欄）";
-      distribution.set(key, (distribution.get(key) ?? 0) + 1);
-    }
-    const sortedDist = [...distribution.entries()].sort((a, b) =>
-      a[0].localeCompare(b[0], "ja"),
-    );
-
-    return {
-      reportCount: records.length,
-      subjectCount: rows.length,
-      avg,
-      distribution: sortedDist,
-    };
-  }, [rows, records.length]);
+  const stats = useMemo(() => computeStats(records, rows), [records, rows]);
 
   function handleDelete(id: string) {
     if (!window.confirm("このレコードを削除しますか？")) return;
@@ -188,7 +105,7 @@ export default function DashboardPage() {
             </table>
 
             <div className="btn-row">
-              <button className="btn" onClick={() => downloadCsv(rows)}>
+              <button className="btn" onClick={() => downloadCsv(buildCsv(rows))}>
                 ⬇ CSVをダウンロード
               </button>
               <Link className="btn btn-secondary" href="/">
