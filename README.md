@@ -34,6 +34,40 @@ npm run dev
 
 ブラウザで http://localhost:3000 を開きます。
 
+## テスト
+
+集計・CSV出力の純粋ロジックにはユニットテストがあります（Node 22 のネイティブ TypeScript 実行を利用）。
+
+```bash
+npm test
+```
+
+ビルドと型チェック:
+
+```bash
+npm run build      # 本番ビルド
+npx tsc --noEmit   # 型チェックのみ
+```
+
+## Vercel へのデプロイ
+
+このアプリは Vercel にそのままデプロイできます。
+
+1. [Vercel](https://vercel.com/new) で **Add New → Project** を開く
+2. GitHub リポジトリ `Chishokan/rating` をインポート
+   （ブランチは `claude/sweet-faraday-52cecc`、または `main` にマージ後）
+3. Framework Preset は **Next.js**（自動検出）
+4. **Environment Variables** に以下を追加:
+   - `ANTHROPIC_API_KEY` = 自分の Claude API キー
+5. **Deploy** を押す
+
+補足:
+- API ルート（`app/api/extract/route.ts`）は Node.js ランタイムで動作し、
+  `export const maxDuration = 60` で関数の実行時間を最大60秒に設定済みです。
+- ビルド時に API キーは不要です（キーはリクエスト時にのみ読み込まれます）。
+  キー未設定でもデプロイは成功し、解析実行時のみ 500 を返します。
+- デプロイ後、実機（スマホ）で通知表を撮影して評定の読み取り精度を確認してください。
+
 ## 使い方
 
 1. **撮影・登録** ページで通知表の写真を選択／撮影
