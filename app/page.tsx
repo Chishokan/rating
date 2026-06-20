@@ -7,11 +7,39 @@ import { SUBJECTS, type SubjectKey } from "@/lib/subjects";
 import { addRecord } from "@/lib/storage";
 import type { ExtractedReportCard, ExtractRequest, Ratings } from "@/lib/types";
 
-/** 空の評定マップ */
+type ItemStatus = "pending" | "processing" | "done" | "error";
+
+interface UploadItem {
+  id: string;
+  fileName: string;
+  previewUrl: string;
+  payload: { base64: string; mediaType: string } | null;
+  status: ItemStatus;
+  error: string | null;
+  draft: ExtractedReportCard | null;
+}
+
+const STATUS_LABEL: Record<ItemStatus, string> = {
+  pending: "未解析",
+  processing: "解析中",
+  done: "解析済み",
+  error: "エラー",
+};
+
+function uid(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 function emptyRatings(): Ratings {
   const r = {} as Ratings;
   for (const s of SUBJECTS) r[s.key] = null;
   return r;
+}
+
+function errMsg(err: unknown, fallback: string): string {
+  return err instanceof Error ? err.message : fallback;
 }
 
 /** 画像を最大辺 maxEdge px に縮小し、{ base64, mediaType } を返す */
@@ -54,99 +82,158 @@ async function fileToScaledBase64(
   return { base64, mediaType: "image/jpeg" };
 }
 
+async function callExtract(payload: {
+  base64: string;
+  mediaType: string;
+}): Promise<ExtractedReportCard> {
+  const reqBody: ExtractRequest = {
+    image: payload.base64,
+    mediaType: payload.mediaType,
+  };
+  const res = await fetch("/api/extract", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(reqBody),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error ?? "解析に失敗しました。");
+  const card = data as ExtractedReportCard;
+  return { ...card, ratings: { ...emptyRatings(), ...card.ratings } };
+}
+
 export default function CapturePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [campus, setCampus] = useState<string>("");
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [imagePayload, setImagePayload] = useState<{
-    base64: string;
-    mediaType: string;
-  } | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<ExtractedReportCard | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [items, setItems] = useState<UploadItem[]>([]);
+  const [running, setRunning] = useState(false);
+  const [savedCount, setSavedCount] = useState<number | null>(null);
 
-  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setError(null);
-    setDraft(null);
-    setSaved(false);
-    setPreviewUrl(URL.createObjectURL(file));
-    try {
-      const payload = await fileToScaledBase64(file);
-      setImagePayload(payload);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "画像の処理に失敗しました。");
-      setImagePayload(null);
-    }
+  const doneCount = items.filter((it) => it.status === "done").length;
+  const analyzableCount = items.filter(
+    (it) => it.payload && it.status !== "done",
+  ).length;
+
+  async function handleFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    if (files.length === 0) return;
+    setSavedCount(null);
+
+    const newItems: UploadItem[] = await Promise.all(
+      files.map(async (file) => {
+        const previewUrl = URL.createObjectURL(file);
+        try {
+          const payload = await fileToScaledBase64(file);
+          return {
+            id: uid(),
+            fileName: file.name,
+            previewUrl,
+            payload,
+            status: "pending" as ItemStatus,
+            error: null,
+            draft: null,
+          };
+        } catch (err) {
+          return {
+            id: uid(),
+            fileName: file.name,
+            previewUrl,
+            payload: null,
+            status: "error" as ItemStatus,
+            error: errMsg(err, "画像の処理に失敗しました。"),
+            draft: null,
+          };
+        }
+      }),
+    );
+    setItems((prev) => [...prev, ...newItems]);
+    // 同じファイルを選び直せるよう値をクリア
+    if (fileInputRef.current) fileInputRef.current.value = "";
   }
 
-  async function handleExtract() {
-    if (!imagePayload) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const reqBody: ExtractRequest = {
-        image: imagePayload.base64,
-        mediaType: imagePayload.mediaType,
-      };
-      const res = await fetch("/api/extract", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(reqBody),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error ?? "解析に失敗しました。");
-      }
-      const card = data as ExtractedReportCard;
-      // 念のため全科目キーを補完
-      setDraft({ ...card, ratings: { ...emptyRatings(), ...card.ratings } });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "解析に失敗しました。");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function updateDraft(patch: Partial<ExtractedReportCard>) {
-    setDraft((prev) => (prev ? { ...prev, ...patch } : prev));
-  }
-
-  function updateRating(key: SubjectKey, value: string) {
-    setDraft((prev) =>
-      prev ? { ...prev, ratings: { ...prev.ratings, [key]: value } } : prev,
+  function patchItem(id: string, patch: Partial<UploadItem>) {
+    setItems((prev) =>
+      prev.map((it) => (it.id === id ? { ...it, ...patch } : it)),
     );
   }
 
-  function handleSave() {
-    if (!draft || !campus) return;
-    const ratings = {} as Ratings;
-    for (const s of SUBJECTS) {
-      const v = (draft.ratings[s.key] ?? "").trim();
-      ratings[s.key] = v === "" ? null : v;
+  async function analyzeOne(id: string, payload: UploadItem["payload"]) {
+    if (!payload) return;
+    patchItem(id, { status: "processing", error: null });
+    try {
+      const card = await callExtract(payload);
+      patchItem(id, { status: "done", draft: card, error: null });
+    } catch (err) {
+      patchItem(id, {
+        status: "error",
+        error: errMsg(err, "解析に失敗しました。"),
+      });
     }
-    addRecord({ ...draft, ratings }, campus);
-    setSaved(true);
   }
 
-  // 写真関連だけリセット（校舎は続けて登録できるよう保持）
-  function reset() {
-    setPreviewUrl(null);
-    setImagePayload(null);
-    setDraft(null);
-    setError(null);
-    setSaved(false);
-    if (fileInputRef.current) fileInputRef.current.value = "";
+  async function analyzeAll() {
+    setRunning(true);
+    setSavedCount(null);
+    // 呼び出し時点のスナップショットから対象を決定（順次処理）
+    const targets = items.filter(
+      (it) => it.payload && it.status !== "done" && it.status !== "processing",
+    );
+    for (const it of targets) {
+      await analyzeOne(it.id, it.payload);
+    }
+    setRunning(false);
+  }
+
+  function updateField(id: string, patch: Partial<ExtractedReportCard>) {
+    setItems((prev) =>
+      prev.map((it) =>
+        it.id === id && it.draft
+          ? { ...it, draft: { ...it.draft, ...patch } }
+          : it,
+      ),
+    );
+  }
+
+  function updateRating(id: string, key: SubjectKey, value: string) {
+    setItems((prev) =>
+      prev.map((it) =>
+        it.id === id && it.draft
+          ? { ...it, draft: { ...it.draft, ratings: { ...it.draft.ratings, [key]: value } } }
+          : it,
+      ),
+    );
+  }
+
+  function removeItem(id: string) {
+    setItems((prev) => prev.filter((it) => it.id !== id));
+  }
+
+  function clearAll() {
+    if (items.length > 0 && !window.confirm("選択中の画像をすべて取り消しますか？"))
+      return;
+    setItems([]);
+    setSavedCount(null);
+  }
+
+  function saveAll() {
+    if (!campus) return;
+    const toSave = items.filter((it) => it.status === "done" && it.draft);
+    for (const it of toSave) {
+      const ratings = {} as Ratings;
+      for (const s of SUBJECTS) {
+        const v = (it.draft!.ratings[s.key] ?? "").trim();
+        ratings[s.key] = v === "" ? null : v;
+      }
+      addRecord({ ...it.draft!, ratings }, campus);
+    }
+    setSavedCount(toSave.length);
+    setItems([]);
   }
 
   return (
     <div>
       <h1>通知表を撮影して評定を登録</h1>
       <p className="subtitle">
-        通知表の写真を撮る（または選ぶ）と、AIが10科目の評定を読み取ります。内容を確認してから保存してください。
+        校舎を選び、通知表の写真を複数まとめてアップロードできます。AIが各画像から10科目の評定を読み取ります。
       </p>
 
       <div className="card">
@@ -166,128 +253,186 @@ export default function CapturePage() {
           </select>
         </div>
 
-        <label htmlFor="photo">② 通知表の写真（撮影 / 既存写真の選択）</label>
+        <label htmlFor="photo">
+          ② 通知表の写真（撮影 / 既存写真・複数選択可）
+        </label>
         <input
           id="photo"
           ref={fileInputRef}
           type="file"
           accept="image/*"
+          multiple
           disabled={!campus}
-          onChange={handleFile}
+          onChange={handleFiles}
         />
-        {!campus && (
+        {!campus ? (
           <p className="muted" style={{ marginTop: 4 }}>
             先に校舎を選択すると写真をアップロードできます。
           </p>
-        )}
-        {previewUrl && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={previewUrl} alt="通知表のプレビュー" className="preview" />
-        )}
-
-        {imagePayload && !draft && (
-          <div className="btn-row">
-            <button className="btn" onClick={handleExtract} disabled={loading}>
-              {loading ? (
-                <>
-                  <span className="spinner" /> 解析中…
-                </>
-              ) : (
-                "③ 評定を読み取る"
-              )}
-            </button>
-            <button className="btn btn-secondary" onClick={reset}>
-              やり直す
-            </button>
-          </div>
+        ) : (
+          <p className="muted" style={{ marginTop: 4 }}>
+            複数枚まとめて選択できます。追加で選ぶと末尾に足されます。
+          </p>
         )}
       </div>
 
-      {error && <div className="error">{error}</div>}
-
-      {draft && (
-        <div className="card">
-          <h2 style={{ marginTop: 0 }}>④ 読み取り結果を確認・修正</h2>
-          <p className="muted" style={{ marginTop: 0 }}>
-            校舎: <strong>{campus}</strong>
+      {savedCount !== null && (
+        <div
+          className="card"
+          style={{ borderColor: "#bbf7d0", background: "#f0fdf4" }}
+        >
+          <p style={{ margin: 0, color: "var(--success)", fontWeight: 600 }}>
+            ✓ {savedCount}件を保存しました（校舎: {campus}）。
           </p>
-          <div className="field-grid">
-            <div className="field">
-              <label>氏名</label>
-              <input
-                type="text"
-                value={draft.studentName ?? ""}
-                onChange={(e) => updateDraft({ studentName: e.target.value })}
-              />
+          <div className="btn-row">
+            <Link className="btn" href="/dashboard">
+              集計を見る
+            </Link>
+          </div>
+        </div>
+      )}
+
+      {items.length > 0 && (
+        <>
+          <div className="card">
+            <div className="toolbar">
+              <button
+                className="btn"
+                onClick={analyzeAll}
+                disabled={running || analyzableCount === 0}
+              >
+                {running ? (
+                  <>
+                    <span className="spinner" /> 解析中…
+                  </>
+                ) : (
+                  `③ すべて解析（${analyzableCount}件）`
+                )}
+              </button>
+              <button
+                className="btn btn-secondary"
+                onClick={clearAll}
+                disabled={running}
+              >
+                すべてクリア
+              </button>
+              <span className="muted">
+                {items.length}件中 {doneCount}件 解析済み
+              </span>
             </div>
-            <div className="field">
-              <label>学年</label>
-              <input
-                type="text"
-                value={draft.schoolYear ?? ""}
-                onChange={(e) => updateDraft({ schoolYear: e.target.value })}
-              />
-            </div>
-            <div className="field">
-              <label>学期</label>
-              <input
-                type="text"
-                value={draft.term ?? ""}
-                onChange={(e) => updateDraft({ term: e.target.value })}
-              />
+
+            <div className="btn-row" style={{ marginTop: 0 }}>
+              <button
+                className="btn"
+                onClick={saveAll}
+                disabled={running || doneCount === 0 || !campus}
+              >
+                ④ 解析済み {doneCount}件をまとめて保存
+              </button>
             </div>
           </div>
 
-          <p className="muted" style={{ marginTop: 0 }}>
-            読み取れなかった科目は空欄のままで構いません。
-          </p>
-          <table>
-            <thead>
-              <tr>
-                <th style={{ width: "55%" }}>科目</th>
-                <th>評定</th>
-              </tr>
-            </thead>
-            <tbody>
-              {SUBJECTS.map((s) => (
-                <tr key={s.key}>
-                  <td>{s.label}</td>
-                  <td>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={draft.ratings[s.key] ?? ""}
-                      onChange={(e) => updateRating(s.key, e.target.value)}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {items.map((it, index) => (
+            <div className="card" key={it.id}>
+              <div className="item-head">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={it.previewUrl} alt="" className="thumb" />
+                <div style={{ flex: 1 }}>
+                  <div className="item-title">
+                    {index + 1}. {it.fileName}
+                  </div>
+                  <span className={`badge badge-${it.status}`}>
+                    {STATUS_LABEL[it.status]}
+                  </span>
+                </div>
+                <div style={{ display: "flex", gap: 10 }}>
+                  {it.payload && it.status !== "processing" && (
+                    <button
+                      className="remove-link"
+                      style={{ color: "var(--primary)" }}
+                      onClick={() => analyzeOne(it.id, it.payload)}
+                      disabled={running}
+                    >
+                      {it.status === "done" ? "再解析" : "解析"}
+                    </button>
+                  )}
+                  <button
+                    className="remove-link"
+                    onClick={() => removeItem(it.id)}
+                    disabled={running}
+                  >
+                    削除
+                  </button>
+                </div>
+              </div>
 
-          {saved ? (
-            <div className="btn-row">
-              <span style={{ color: "var(--success)", fontWeight: 600 }}>
-                ✓ 保存しました。
-              </span>
-              <Link className="btn" href="/dashboard">
-                集計を見る
-              </Link>
-              <button className="btn btn-secondary" onClick={reset}>
-                続けて登録
-              </button>
+              {it.error && <div className="error">{it.error}</div>}
+
+              {it.draft && (
+                <>
+                  <div className="field-grid">
+                    <div className="field">
+                      <label>氏名</label>
+                      <input
+                        type="text"
+                        value={it.draft.studentName ?? ""}
+                        onChange={(e) =>
+                          updateField(it.id, { studentName: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="field">
+                      <label>学年</label>
+                      <input
+                        type="text"
+                        value={it.draft.schoolYear ?? ""}
+                        onChange={(e) =>
+                          updateField(it.id, { schoolYear: e.target.value })
+                        }
+                      />
+                    </div>
+                    <div className="field">
+                      <label>学期</label>
+                      <input
+                        type="text"
+                        value={it.draft.term ?? ""}
+                        onChange={(e) =>
+                          updateField(it.id, { term: e.target.value })
+                        }
+                      />
+                    </div>
+                  </div>
+
+                  <table>
+                    <thead>
+                      <tr>
+                        <th style={{ width: "55%" }}>科目</th>
+                        <th>評定</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {SUBJECTS.map((s) => (
+                        <tr key={s.key}>
+                          <td>{s.label}</td>
+                          <td>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={it.draft!.ratings[s.key] ?? ""}
+                              onChange={(e) =>
+                                updateRating(it.id, s.key, e.target.value)
+                              }
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </>
+              )}
             </div>
-          ) : (
-            <div className="btn-row">
-              <button className="btn" onClick={handleSave}>
-                ⑤ この内容で保存
-              </button>
-              <button className="btn btn-secondary" onClick={reset}>
-                やり直す
-              </button>
-            </div>
-          )}
-        </div>
+          ))}
+        </>
       )}
 
       <p className="muted">
