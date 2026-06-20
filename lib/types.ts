@@ -18,6 +18,14 @@ export interface ExtractedReportCard {
   ratings: Ratings;
 }
 
+/** /api/extract のリクエストボディ（クライアント→サーバで共有） */
+export interface ExtractRequest {
+  /** base64 エンコードした画像データ（"data:" プレフィックスは含めない） */
+  image: string;
+  /** 画像の MIME タイプ（例: image/jpeg） */
+  mediaType: string;
+}
+
 /** localStorage に保存する 1 レコード（抽出結果＋メタ情報） */
 export interface ReportRecord extends ExtractedReportCard {
   /** 一意なID */

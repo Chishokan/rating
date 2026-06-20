@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import type { ExtractRequest } from "@/lib/types";
 
 // Anthropic SDK は Node.js ランタイムで実行する必要があります。
 export const runtime = "nodejs";
@@ -90,7 +91,7 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: { image?: string; mediaType?: string };
+  let body: Partial<ExtractRequest>;
   try {
     body = await request.json();
   } catch {

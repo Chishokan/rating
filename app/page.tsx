@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRef, useState } from "react";
 import { SUBJECTS, type SubjectKey } from "@/lib/subjects";
 import { addRecord } from "@/lib/storage";
-import type { ExtractedReportCard, Ratings } from "@/lib/types";
+import type { ExtractedReportCard, ExtractRequest, Ratings } from "@/lib/types";
 
 /** 空の評定マップ */
 function emptyRatings(): Ratings {
@@ -44,7 +44,12 @@ async function fileToScaledBase64(
   ctx.drawImage(img, 0, 0, w, h);
 
   const outUrl = canvas.toDataURL("image/jpeg", 0.9);
-  const base64 = outUrl.split(",")[1];
+  const base64 = outUrl.split(",")[1] ?? "";
+  if (!base64) {
+    throw new Error(
+      "画像を変換できませんでした。別の写真（JPEG/PNG）でお試しください。",
+    );
+  }
   return { base64, mediaType: "image/jpeg" };
 }
 
@@ -81,10 +86,14 @@ export default function CapturePage() {
     setLoading(true);
     setError(null);
     try {
+      const reqBody: ExtractRequest = {
+        image: imagePayload.base64,
+        mediaType: imagePayload.mediaType,
+      };
       const res = await fetch("/api/extract", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(imagePayload),
+        body: JSON.stringify(reqBody),
       });
       const data = await res.json();
       if (!res.ok) {
