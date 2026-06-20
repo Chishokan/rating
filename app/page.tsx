@@ -1,10 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
+import { SUBJECTS, type SubjectKey } from "@/lib/subjects";
 import { addRecord } from "@/lib/storage";
-import type { ExtractedReportCard, SubjectRating } from "@/lib/types";
+import type { ExtractedReportCard, Ratings } from "@/lib/types";
+
+/** 空の評定マップ */
+function emptyRatings(): Ratings {
+  const r = {} as Ratings;
+  for (const s of SUBJECTS) r[s.key] = null;
+  return r;
+}
 
 /** 画像を最大辺 maxEdge px に縮小し、{ base64, mediaType } を返す */
 async function fileToScaledBase64(
@@ -42,7 +49,6 @@ async function fileToScaledBase64(
 }
 
 export default function CapturePage() {
-  const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [imagePayload, setImagePayload] = useState<{
@@ -84,7 +90,9 @@ export default function CapturePage() {
       if (!res.ok) {
         throw new Error(data.error ?? "解析に失敗しました。");
       }
-      setDraft(data as ExtractedReportCard);
+      const card = data as ExtractedReportCard;
+      // 念のため全科目キーを補完
+      setDraft({ ...card, ratings: { ...emptyRatings(), ...card.ratings } });
     } catch (err) {
       setError(err instanceof Error ? err.message : "解析に失敗しました。");
     } finally {
@@ -96,39 +104,20 @@ export default function CapturePage() {
     setDraft((prev) => (prev ? { ...prev, ...patch } : prev));
   }
 
-  function updateSubject(index: number, patch: Partial<SubjectRating>) {
-    setDraft((prev) => {
-      if (!prev) return prev;
-      const subjects = prev.subjects.map((s, i) =>
-        i === index ? { ...s, ...patch } : s,
-      );
-      return { ...prev, subjects };
-    });
-  }
-
-  function addSubjectRow() {
+  function updateRating(key: SubjectKey, value: string) {
     setDraft((prev) =>
-      prev ? { ...prev, subjects: [...prev.subjects, { subject: "", rating: "" }] } : prev,
-    );
-  }
-
-  function removeSubject(index: number) {
-    setDraft((prev) =>
-      prev
-        ? { ...prev, subjects: prev.subjects.filter((_, i) => i !== index) }
-        : prev,
+      prev ? { ...prev, ratings: { ...prev.ratings, [key]: value } } : prev,
     );
   }
 
   function handleSave() {
     if (!draft) return;
-    const cleaned: ExtractedReportCard = {
-      ...draft,
-      subjects: draft.subjects.filter(
-        (s) => s.subject.trim() !== "" || s.rating.trim() !== "",
-      ),
-    };
-    addRecord(cleaned);
+    const ratings = {} as Ratings;
+    for (const s of SUBJECTS) {
+      const v = (draft.ratings[s.key] ?? "").trim();
+      ratings[s.key] = v === "" ? null : v;
+    }
+    addRecord({ ...draft, ratings });
     setSaved(true);
   }
 
@@ -145,7 +134,7 @@ export default function CapturePage() {
     <div>
       <h1>通知表を撮影して評定を登録</h1>
       <p className="subtitle">
-        通知表の写真を撮る（または選ぶ）と、AIが科目ごとの評定を読み取ります。内容を確認してから保存してください。
+        通知表の写真を撮る（または選ぶ）と、AIが10科目の評定を読み取ります。内容を確認してから保存してください。
       </p>
 
       <div className="card">
@@ -213,50 +202,32 @@ export default function CapturePage() {
             </div>
           </div>
 
+          <p className="muted" style={{ marginTop: 0 }}>
+            読み取れなかった科目は空欄のままで構いません。
+          </p>
           <table>
             <thead>
               <tr>
                 <th style={{ width: "55%" }}>科目</th>
                 <th>評定</th>
-                <th style={{ width: "60px" }}></th>
               </tr>
             </thead>
             <tbody>
-              {draft.subjects.map((s, i) => (
-                <tr key={i}>
+              {SUBJECTS.map((s) => (
+                <tr key={s.key}>
+                  <td>{s.label}</td>
                   <td>
                     <input
                       type="text"
-                      value={s.subject}
-                      onChange={(e) => updateSubject(i, { subject: e.target.value })}
+                      inputMode="numeric"
+                      value={draft.ratings[s.key] ?? ""}
+                      onChange={(e) => updateRating(s.key, e.target.value)}
                     />
-                  </td>
-                  <td>
-                    <input
-                      type="text"
-                      value={s.rating}
-                      onChange={(e) => updateSubject(i, { rating: e.target.value })}
-                    />
-                  </td>
-                  <td>
-                    <button
-                      className="remove-link"
-                      onClick={() => removeSubject(i)}
-                      aria-label="削除"
-                    >
-                      削除
-                    </button>
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-
-          <div className="btn-row">
-            <button className="btn btn-secondary" onClick={addSubjectRow}>
-              ＋ 科目を追加
-            </button>
-          </div>
 
           {saved ? (
             <div className="btn-row">

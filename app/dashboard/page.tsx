@@ -2,12 +2,8 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import {
-  buildCsv,
-  computeStats,
-  flatten,
-  formatDate,
-} from "@/lib/aggregate";
+import { buildCsv, computeStats, formatDate, toRows } from "@/lib/aggregate";
+import { SUBJECTS } from "@/lib/subjects";
 import { clearRecords, deleteRecord, loadRecords } from "@/lib/storage";
 import type { ReportRecord } from "@/lib/types";
 
@@ -34,11 +30,11 @@ export default function DashboardPage() {
     setMounted(true);
   }, []);
 
-  const rows = useMemo(() => flatten(records), [records]);
-  const stats = useMemo(() => computeStats(records, rows), [records, rows]);
+  const rows = useMemo(() => toRows(records), [records]);
+  const stats = useMemo(() => computeStats(records), [records]);
 
   function handleDelete(id: string) {
-    if (!window.confirm("このレコードを削除しますか？")) return;
+    if (!window.confirm("この通知表のレコードを削除しますか？")) return;
     setRecords(deleteRecord(id));
   }
 
@@ -75,8 +71,8 @@ export default function DashboardPage() {
                 <div className="label">登録枚数</div>
               </div>
               <div className="stat">
-                <div className="value">{stats.subjectCount}</div>
-                <div className="label">科目数（合計）</div>
+                <div className="value">{stats.filledCount}</div>
+                <div className="label">入力済み科目数</div>
               </div>
               <div className="stat">
                 <div className="value">
@@ -105,7 +101,10 @@ export default function DashboardPage() {
             </table>
 
             <div className="btn-row">
-              <button className="btn" onClick={() => downloadCsv(buildCsv(rows))}>
+              <button
+                className="btn"
+                onClick={() => downloadCsv(buildCsv(records))}
+              >
                 ⬇ CSVをダウンロード
               </button>
               <Link className="btn btn-secondary" href="/">
@@ -118,7 +117,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="card">
-            <h3 style={{ marginTop: 0 }}>明細</h3>
+            <h3 style={{ marginTop: 0 }}>明細（1行 = 1通知表）</h3>
             <div style={{ overflowX: "auto" }}>
               <table>
                 <thead>
@@ -127,26 +126,28 @@ export default function DashboardPage() {
                     <th>氏名</th>
                     <th>学年</th>
                     <th>学期</th>
-                    <th>科目</th>
-                    <th>評定</th>
+                    {SUBJECTS.map((s) => (
+                      <th key={s.key}>{s.label}</th>
+                    ))}
                     <th></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((row, i) => (
-                    <tr key={`${row.recordId}-${i}`}>
+                  {rows.map((row) => (
+                    <tr key={row.recordId}>
                       <td>{formatDate(row.createdAt)}</td>
                       <td>{row.studentName}</td>
                       <td>{row.schoolYear}</td>
                       <td>{row.term}</td>
-                      <td>{row.subject}</td>
-                      <td>{row.rating}</td>
+                      {SUBJECTS.map((s) => (
+                        <td key={s.key}>{row.ratings[s.key]}</td>
+                      ))}
                       <td>
                         <button
                           className="remove-link"
                           onClick={() => handleDelete(row.recordId)}
                         >
-                          枚ごと削除
+                          削除
                         </button>
                       </td>
                     </tr>

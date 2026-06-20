@@ -1,13 +1,10 @@
 // 通知表から抽出するデータの型定義。
 // API ルートと UI で共有します。
 
-/** 1 科目分の評定 */
-export interface SubjectRating {
-  /** 科目名（例: 国語, 数学, 英語） */
-  subject: string;
-  /** 評定（例: "5", "A", "よくできる" など、通知表の記載をそのまま） */
-  rating: string;
-}
+import type { SubjectKey } from "./subjects";
+
+/** 10 科目の評定。読み取れた科目に評定（多くは数値）、無ければ null */
+export type Ratings = Record<SubjectKey, string | null>;
 
 /** Claude Vision API が 1 枚の通知表から抽出する構造 */
 export interface ExtractedReportCard {
@@ -17,8 +14,8 @@ export interface ExtractedReportCard {
   schoolYear: string | null;
   /** 学期・期間（例: "1学期", "前期", "学年末"。読み取れない場合は null） */
   term: string | null;
-  /** 科目ごとの評定一覧 */
-  subjects: SubjectRating[];
+  /** 10 科目の評定 */
+  ratings: Ratings;
 }
 
 /** localStorage に保存する 1 レコード（抽出結果＋メタ情報） */

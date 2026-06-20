@@ -11,7 +11,38 @@ export const maxDuration = 60;
 const client = new Anthropic();
 
 // Claude に返してほしい構造を Zod で定義します。
-// 読み取れない項目は null を許容します。
+// 評定は 10 科目の固定フィールド。読み取れない科目は null を許容します。
+const RatingsSchema = z.object({
+  kokugo: z.string().nullable().describe("国語の評定。無ければ null"),
+  eigo: z
+    .string()
+    .nullable()
+    .describe("英語（外国語・外国語（英語）含む）の評定。無ければ null"),
+  sugaku: z.string().nullable().describe("数学（算数）の評定。無ければ null"),
+  rika: z.string().nullable().describe("理科の評定。無ければ null"),
+  shakai: z
+    .string()
+    .nullable()
+    .describe("社会（地理・歴史・公民含む）の評定。無ければ null"),
+  ongaku: z.string().nullable().describe("音楽の評定。無ければ null"),
+  bijutsu: z
+    .string()
+    .nullable()
+    .describe("美術（図画工作・図工含む）の評定。無ければ null"),
+  hotai: z
+    .string()
+    .nullable()
+    .describe("保健体育（体育・保健含む）の評定。無ければ null"),
+  kateika: z
+    .string()
+    .nullable()
+    .describe("家庭科（技術・家庭の家庭分野含む）の評定。無ければ null"),
+  gijutsu: z
+    .string()
+    .nullable()
+    .describe("技術（技術・家庭の技術分野含む）の評定。無ければ null"),
+});
+
 const ReportCardSchema = z.object({
   studentName: z.string().nullable().describe("児童・生徒の氏名。読み取れなければ null"),
   schoolYear: z
@@ -22,26 +53,32 @@ const ReportCardSchema = z.object({
     .string()
     .nullable()
     .describe('学期・期間。例: "1学期", "前期", "学年末"。読み取れなければ null'),
-  subjects: z
-    .array(
-      z.object({
-        subject: z.string().describe("科目名。例: 国語, 数学, 英語"),
-        rating: z
-          .string()
-          .describe("評定。通知表の記載どおり。例: 5, A, よくできる"),
-      }),
-    )
-    .describe("科目ごとの評定の一覧"),
+  ratings: RatingsSchema.describe(
+    "10 科目の評定。読み取れた科目だけ値を入れ、それ以外は必ず null",
+  ),
 });
 
 const PROMPT = `あなたは日本の学校の通知表（通信簿）を読み取る専門家です。
-添付された通知表の写真から、各教科・科目の「評定（成績）」を正確に抽出してください。
+添付された通知表の写真から、各教科の「評定（成績）」を読み取り、決められた 10 科目の枠に振り分けてください。
+
+10 科目（出力キー → 対応する通知表の科目名）:
+- kokugo  … 国語
+- eigo    … 英語 / 外国語 / 外国語（英語）
+- sugaku  … 数学 / 算数
+- rika    … 理科
+- shakai  … 社会 / 地理 / 歴史 / 公民
+- ongaku  … 音楽
+- bijutsu … 美術 / 図画工作 / 図工
+- hotai   … 保健体育 / 体育 / 保健
+- kateika … 家庭科 / 技術・家庭の「家庭分野」
+- gijutsu … 技術 / 技術・家庭の「技術分野」
 
 ルール:
-- 科目名と評定をそのまま読み取ること。評定は数値（例: 5, 4, 3）でも記号（例: A, B, C）でも、文章（例: よくできる）でも、通知表に書かれた表記のまま記録すること。
-- 「観点別評価」と「評定」が別々にある場合は、総合的な「評定」の方を優先して subjects に入れること。
-- 氏名・学年・学期が読み取れる場合は記録し、読み取れない場合は null にすること。
-- 表に存在しない科目を創作しないこと。読み取れた科目だけを返すこと。`;
+- 各科目の「評定」をそのまま読み取ること（多くは 1〜5 の数値。A/B/C などの記号や文章の場合はその表記のまま）。
+- 「観点別評価」と「評定」が別々にある場合は、総合的な「評定」の方を採用すること。
+- 通知表に存在しない科目、または読み取れない科目は必ず null にすること（推測で値を入れない）。
+- 「技術・家庭」が 1 つの評定でまとめられている場合は、その値を gijutsu と kateika の両方に入れること。技術分野・家庭分野で別々の評定がある場合はそれぞれに入れること。
+- 氏名・学年・学期が読み取れる場合は記録し、読み取れない場合は null にすること。`;
 
 type SupportedMedia = "image/jpeg" | "image/png" | "image/webp" | "image/gif";
 
