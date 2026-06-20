@@ -9,6 +9,7 @@ import type { ReportRecord } from "./types";
 export interface CardRow {
   recordId: string;
   createdAt: string;
+  campus: string;
   studentName: string;
   schoolYear: string;
   term: string;
@@ -37,6 +38,7 @@ export function toRows(records: ReportRecord[]): CardRow[] {
     return {
       recordId: r.id,
       createdAt: r.createdAt,
+      campus: r.campus ?? "",
       studentName: r.studentName ?? "",
       schoolYear: r.schoolYear ?? "",
       term: r.term ?? "",
@@ -96,9 +98,10 @@ export function csvCell(value: string): string {
   return value;
 }
 
-/** CSV のヘッダ列（保存日時/氏名/学年/学期 ＋ 10 科目） */
+/** CSV のヘッダ列（保存日時/校舎/氏名/学年/学期 ＋ 10 科目） */
 export const CSV_HEADER = [
   "保存日時",
+  "校舎",
   "氏名",
   "学年",
   "学期",
@@ -111,6 +114,7 @@ export function buildCsv(records: ReportRecord[]): string {
   for (const row of toRows(records)) {
     const cells = [
       formatDate(row.createdAt),
+      row.campus,
       row.studentName,
       row.schoolYear,
       row.term,

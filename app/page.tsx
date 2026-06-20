@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRef, useState } from "react";
+import { CAMPUSES } from "@/lib/campuses";
 import { SUBJECTS, type SubjectKey } from "@/lib/subjects";
 import { addRecord } from "@/lib/storage";
 import type { ExtractedReportCard, ExtractRequest, Ratings } from "@/lib/types";
@@ -55,6 +56,7 @@ async function fileToScaledBase64(
 
 export default function CapturePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [campus, setCampus] = useState<string>("");
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [imagePayload, setImagePayload] = useState<{
     base64: string;
@@ -120,16 +122,17 @@ export default function CapturePage() {
   }
 
   function handleSave() {
-    if (!draft) return;
+    if (!draft || !campus) return;
     const ratings = {} as Ratings;
     for (const s of SUBJECTS) {
       const v = (draft.ratings[s.key] ?? "").trim();
       ratings[s.key] = v === "" ? null : v;
     }
-    addRecord({ ...draft, ratings });
+    addRecord({ ...draft, ratings }, campus);
     setSaved(true);
   }
 
+  // 写真関連だけリセット（校舎は続けて登録できるよう保持）
   function reset() {
     setPreviewUrl(null);
     setImagePayload(null);
@@ -147,15 +150,36 @@ export default function CapturePage() {
       </p>
 
       <div className="card">
-        <label htmlFor="photo">① 通知表の写真</label>
+        <div className="field">
+          <label htmlFor="campus">① 校舎を選択</label>
+          <select
+            id="campus"
+            value={campus}
+            onChange={(e) => setCampus(e.target.value)}
+          >
+            <option value="">校舎を選択してください</option>
+            {CAMPUSES.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <label htmlFor="photo">② 通知表の写真（撮影 / 既存写真の選択）</label>
         <input
           id="photo"
           ref={fileInputRef}
           type="file"
           accept="image/*"
-          capture="environment"
+          disabled={!campus}
           onChange={handleFile}
         />
+        {!campus && (
+          <p className="muted" style={{ marginTop: 4 }}>
+            先に校舎を選択すると写真をアップロードできます。
+          </p>
+        )}
         {previewUrl && (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={previewUrl} alt="通知表のプレビュー" className="preview" />
@@ -169,7 +193,7 @@ export default function CapturePage() {
                   <span className="spinner" /> 解析中…
                 </>
               ) : (
-                "② 評定を読み取る"
+                "③ 評定を読み取る"
               )}
             </button>
             <button className="btn btn-secondary" onClick={reset}>
@@ -183,7 +207,10 @@ export default function CapturePage() {
 
       {draft && (
         <div className="card">
-          <h2 style={{ marginTop: 0 }}>③ 読み取り結果を確認・修正</h2>
+          <h2 style={{ marginTop: 0 }}>④ 読み取り結果を確認・修正</h2>
+          <p className="muted" style={{ marginTop: 0 }}>
+            校舎: <strong>{campus}</strong>
+          </p>
           <div className="field-grid">
             <div className="field">
               <label>氏名</label>
@@ -253,7 +280,7 @@ export default function CapturePage() {
           ) : (
             <div className="btn-row">
               <button className="btn" onClick={handleSave}>
-                ④ この内容で保存
+                ⑤ この内容で保存
               </button>
               <button className="btn btn-secondary" onClick={reset}>
                 やり直す

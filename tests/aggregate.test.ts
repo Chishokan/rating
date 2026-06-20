@@ -35,6 +35,7 @@ const records: ReportRecord[] = [
   {
     id: "1",
     createdAt: "2026-06-19T01:05:00.000Z",
+    campus: "駅前校",
     studentName: "山田 太郎",
     schoolYear: "中学2年",
     term: "1学期",
@@ -54,6 +55,7 @@ const records: ReportRecord[] = [
   {
     id: "2",
     createdAt: "2026-06-19T02:30:00.000Z",
+    campus: "日宇校",
     studentName: "佐藤 花子",
     schoolYear: "中学2年",
     term: "1学期",
@@ -62,9 +64,10 @@ const records: ReportRecord[] = [
   },
 ];
 
-test("CSV_HEADER: 指定どおりの14列", () => {
+test("CSV_HEADER: 校舎を含む15列", () => {
   assert.deepEqual(CSV_HEADER, [
     "保存日時",
+    "校舎",
     "氏名",
     "学年",
     "学期",
@@ -109,6 +112,7 @@ test("computeStats: 数値評定が無いと平均は null", () => {
     {
       id: "c",
       createdAt: "2026-06-19T03:00:00.000Z",
+      campus: "大野校",
       studentName: null,
       schoolYear: null,
       term: null,
@@ -121,13 +125,16 @@ test("computeStats: 数値評定が無いと平均は null", () => {
 test("buildCsv: ヘッダ + 1行=1通知表、空欄は空セル", () => {
   const csv = buildCsv(records);
   const lines = csv.split("\r\n");
-  assert.equal(lines[0], "保存日時,氏名,学年,学期,国語,英語,数学,理科,社会,音楽,美術,保体,家庭科,技術");
+  assert.equal(
+    lines[0],
+    "保存日時,校舎,氏名,学年,学期,国語,英語,数学,理科,社会,音楽,美術,保体,家庭科,技術",
+  );
   assert.equal(lines.length, 3); // ヘッダ + 2件
-  // 2人目: 国語5・美術A 以外は空欄。日時はTZ依存のため先頭列を除いて検証
+  // 2人目: 校舎=日宇校・国語5・美術A 以外は空欄。日時はTZ依存のため先頭列を除いて検証
   const fields = lines[2].split(",");
   assert.equal(
     fields.slice(1).join(","),
-    "佐藤 花子,中学2年,1学期,5,,,,,,A,,,",
+    "日宇校,佐藤 花子,中学2年,1学期,5,,,,,,A,,,",
   );
 });
 

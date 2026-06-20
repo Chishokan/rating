@@ -30,6 +30,8 @@ export interface ExtractRequest {
 export interface ReportRecord extends ExtractedReportCard {
   /** 一意なID */
   id: string;
+  /** 校舎（所属） */
+  campus: string;
   /** 保存日時（ISO 8601） */
   createdAt: string;
 }

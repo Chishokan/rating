@@ -145,12 +145,33 @@ label {
   margin-bottom: 4px;
 }
 
-input[type="text"] {
+input[type="text"],
+select {
   width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 1rem;
+  background: #fff;
+}
+
+select:disabled,
+input:disabled {
+  background: #f1f5f9;
+  color: var(--muted);
+}
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.filter-bar select {
+  width: auto;
+  min-width: 160px;
 }
 
 .field {

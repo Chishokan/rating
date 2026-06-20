@@ -22,9 +22,13 @@ function persist(records: ReportRecord[]): void {
 }
 
 /** 抽出結果を新規レコードとして追加し、追加後の一覧を返す */
-export function addRecord(card: ExtractedReportCard): ReportRecord[] {
+export function addRecord(
+  card: ExtractedReportCard,
+  campus: string,
+): ReportRecord[] {
   const record: ReportRecord = {
     ...card,
+    campus,
     id:
       typeof crypto !== "undefined" && "randomUUID" in crypto
         ? crypto.randomUUID()

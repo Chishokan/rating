@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { buildCsv, computeStats, formatDate, toRows } from "@/lib/aggregate";
+import { CAMPUSES } from "@/lib/campuses";
 import { SUBJECTS } from "@/lib/subjects";
 import { clearRecords, deleteRecord, loadRecords } from "@/lib/storage";
 import type { ReportRecord } from "@/lib/types";
@@ -24,14 +25,24 @@ function downloadCsv(csv: string): void {
 export default function DashboardPage() {
   const [records, setRecords] = useState<ReportRecord[]>([]);
   const [mounted, setMounted] = useState(false);
+  const [campusFilter, setCampusFilter] = useState<string>("");
 
   useEffect(() => {
     setRecords(loadRecords());
     setMounted(true);
   }, []);
 
-  const rows = useMemo(() => toRows(records), [records]);
-  const stats = useMemo(() => computeStats(records), [records]);
+  // 校舎フィルタを適用したレコード（集計・一覧・CSVの対象）
+  const filtered = useMemo(
+    () =>
+      campusFilter
+        ? records.filter((r) => (r.campus ?? "") === campusFilter)
+        : records,
+    [records, campusFilter],
+  );
+
+  const rows = useMemo(() => toRows(filtered), [filtered]);
+  const stats = useMemo(() => computeStats(filtered), [filtered]);
 
   function handleDelete(id: string) {
     if (!window.confirm("この通知表のレコードを削除しますか？")) return;
@@ -48,19 +59,51 @@ export default function DashboardPage() {
     return <p className="muted">読み込み中…</p>;
   }
 
-  return (
-    <div>
-      <h1>評定の集計</h1>
-      <p className="subtitle">
-        登録した通知表の評定を一覧・集計します。CSVに書き出せばスプレッドシートで開けます。
-      </p>
-
-      {records.length === 0 ? (
+  if (records.length === 0) {
+    return (
+      <div>
+        <h1>評定の集計</h1>
         <div className="card">
           <p>まだデータがありません。</p>
           <Link className="btn" href="/">
             通知表を撮影する
           </Link>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <h1>評定の集計</h1>
+      <p className="subtitle">
+        登録した通知表の評定を校舎ごとに集計します。CSVに書き出せばスプレッドシートで開けます。
+      </p>
+
+      <div className="card">
+        <div className="filter-bar">
+          <label htmlFor="campusFilter" style={{ margin: 0 }}>
+            校舎で絞り込み
+          </label>
+          <select
+            id="campusFilter"
+            value={campusFilter}
+            onChange={(e) => setCampusFilter(e.target.value)}
+          >
+            <option value="">すべて（{records.length}件）</option>
+            {CAMPUSES.map((c) => (
+              <option key={c} value={c}>
+                {c}（{records.filter((r) => (r.campus ?? "") === c).length}件）
+              </option>
+            ))}
+          </select>
+          <span className="muted">表示: {filtered.length}件</span>
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="card">
+          <p>この校舎のデータはありません。</p>
         </div>
       ) : (
         <>
@@ -103,9 +146,10 @@ export default function DashboardPage() {
             <div className="btn-row">
               <button
                 className="btn"
-                onClick={() => downloadCsv(buildCsv(records))}
+                onClick={() => downloadCsv(buildCsv(filtered))}
               >
                 ⬇ CSVをダウンロード
+                {campusFilter ? `（${campusFilter}）` : "（全校舎）"}
               </button>
               <Link className="btn btn-secondary" href="/">
                 ＋ 続けて登録
@@ -123,6 +167,7 @@ export default function DashboardPage() {
                 <thead>
                   <tr>
                     <th>保存日時</th>
+                    <th>校舎</th>
                     <th>氏名</th>
                     <th>学年</th>
                     <th>学期</th>
@@ -136,6 +181,7 @@ export default function DashboardPage() {
                   {rows.map((row) => (
                     <tr key={row.recordId}>
                       <td>{formatDate(row.createdAt)}</td>
+                      <td>{row.campus}</td>
                       <td>{row.studentName}</td>
                       <td>{row.schoolYear}</td>
                       <td>{row.term}</td>
