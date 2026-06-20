@@ -42,6 +42,13 @@ function errMsg(err: unknown, fallback: string): string {
   return err instanceof Error ? err.message : fallback;
 }
 
+/** 同時に解析する最大数（429 を避けつつ高速化） */
+const CONCURRENCY = 4;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /** 画像を最大辺 maxEdge px に縮小し、{ base64, mediaType } を返す */
 async function fileToScaledBase64(
   file: File,
@@ -90,15 +97,27 @@ async function callExtract(payload: {
     image: payload.base64,
     mediaType: payload.mediaType,
   };
-  const res = await fetch("/api/extract", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(reqBody),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? "解析に失敗しました。");
-  const card = data as ExtractedReportCard;
-  return { ...card, ratings: { ...emptyRatings(), ...card.ratings } };
+  // レート制限/過負荷/一時的なサーバエラーは最大2回まで自動リトライ
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch("/api/extract", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(reqBody),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      const card = data as ExtractedReportCard;
+      return { ...card, ratings: { ...emptyRatings(), ...card.ratings } };
+    }
+    const msg: string = data.error ?? "解析に失敗しました。";
+    const retryable =
+      /\((429|500|503|529)\)/.test(msg) || msg.includes("overloaded");
+    if (retryable && attempt < 2) {
+      await sleep(1200 * (attempt + 1) + Math.random() * 600);
+      continue;
+    }
+    throw new Error(msg);
+  }
 }
 
 export default function CapturePage() {
@@ -173,13 +192,23 @@ export default function CapturePage() {
   async function analyzeAll() {
     setRunning(true);
     setSavedCount(null);
-    // 呼び出し時点のスナップショットから対象を決定（順次処理）
+    // 呼び出し時点のスナップショットから対象を決定
     const targets = items.filter(
       (it) => it.payload && it.status !== "done" && it.status !== "processing",
     );
-    for (const it of targets) {
-      await analyzeOne(it.id, it.payload);
-    }
+    // 同時実行数を制限したワーカープールで並列解析
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < targets.length) {
+        const it = targets[cursor++];
+        await analyzeOne(it.id, it.payload);
+      }
+    };
+    const workers = Array.from(
+      { length: Math.min(CONCURRENCY, targets.length) },
+      () => worker(),
+    );
+    await Promise.all(workers);
     setRunning(false);
   }
 
@@ -317,7 +346,7 @@ export default function CapturePage() {
                 すべてクリア
               </button>
               <span className="muted">
-                {items.length}件中 {doneCount}件 解析済み
+                {items.length}件中 {doneCount}件 解析済み（最大{CONCURRENCY}件並列）
               </span>
             </div>
 
