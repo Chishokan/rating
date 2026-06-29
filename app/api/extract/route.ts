@@ -60,7 +60,7 @@ const ReportCardSchema = z.object({
 });
 
 const PROMPT = `あなたは日本の学校の通知表（通信簿）を読み取る専門家です。
-添付された通知表の写真から、各教科の「評定（成績）」を読み取り、決められた 10 科目の枠に振り分けてください。
+添付された通知表の画像または PDF から、各教科の「評定（成績）」を読み取り、決められた 10 科目の枠に振り分けてください。
 
 10 科目（出力キー → 対応する通知表の科目名）:
 - kokugo  … 国語
@@ -81,7 +81,8 @@ const PROMPT = `あなたは日本の学校の通知表（通信簿）を読み�
 - 「技術・家庭」が 1 つの評定でまとめられている場合は、その値を gijutsu と kateika の両方に入れること。技術分野・家庭分野で別々の評定がある場合はそれぞれに入れること。
 - 氏名・学年・学期が読み取れる場合は記録し、読み取れない場合は null にすること。`;
 
-type SupportedMedia = "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+type ImageMedia = "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+type SupportedMedia = ImageMedia | "application/pdf";
 
 export async function POST(request: Request) {
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -111,13 +112,27 @@ export async function POST(request: Request) {
     "image/png",
     "image/webp",
     "image/gif",
+    "application/pdf",
   ];
   if (!allowed.includes(mediaType as SupportedMedia)) {
     return NextResponse.json(
-      { error: `対応していない画像形式です: ${mediaType}` },
+      { error: `対応していない形式です: ${mediaType}` },
       { status: 400 },
     );
   }
+
+  const mt = mediaType as SupportedMedia;
+  // 画像は image ブロック、PDF は document ブロックとして送る
+  const sourceBlock: Anthropic.Beta.Messages.BetaContentBlockParam =
+    mt === "application/pdf"
+      ? {
+          type: "document",
+          source: { type: "base64", media_type: "application/pdf", data: image },
+        }
+      : {
+          type: "image",
+          source: { type: "base64", media_type: mt, data: image },
+        };
 
   try {
     const response = await client.beta.messages.parse({
@@ -127,17 +142,7 @@ export async function POST(request: Request) {
       messages: [
         {
           role: "user",
-          content: [
-            {
-              type: "image",
-              source: {
-                type: "base64",
-                media_type: mediaType as SupportedMedia,
-                data: image,
-              },
-            },
-            { type: "text", text: PROMPT },
-          ],
+          content: [sourceBlock, { type: "text", text: PROMPT }],
         },
       ],
     });

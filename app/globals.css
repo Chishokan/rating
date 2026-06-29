@@ -294,6 +294,16 @@ th {
   flex-shrink: 0;
 }
 
+.thumb-pdf {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--danger);
+  background: #fef2f2;
+}
+
 .item-title {
   font-weight: 600;
   word-break: break-all;

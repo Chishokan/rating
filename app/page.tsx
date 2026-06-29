@@ -12,7 +12,7 @@ type ItemStatus = "pending" | "processing" | "done" | "error";
 interface UploadItem {
   id: string;
   fileName: string;
-  previewUrl: string;
+  previewUrl: string | null;
   payload: { base64: string; mediaType: string } | null;
   status: ItemStatus;
   error: string | null;
@@ -45,8 +45,28 @@ function errMsg(err: unknown, fallback: string): string {
 /** 同時に解析する最大数（429 を避けつつ高速化） */
 const CONCURRENCY = 4;
 
+/** PDF の最大サイズ（Vercel のリクエスト上限 4.5MB 以内に収めるため） */
+const MAX_PDF_BYTES = 3 * 1024 * 1024;
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isPdfFile(file: File): boolean {
+  return file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+}
+
+/** ファイルを base64 文字列として読み込む（PDF など無加工で送る用） */
+async function fileToBase64(file: File): Promise<string> {
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error("ファイルの読み込みに失敗しました。"));
+    reader.readAsDataURL(file);
+  });
+  const base64 = dataUrl.split(",")[1] ?? "";
+  if (!base64) throw new Error("ファイルを読み込めませんでした。");
+  return base64;
 }
 
 /** 画像を最大辺 maxEdge px に縮小し、{ base64, mediaType } を返す */
@@ -139,27 +159,42 @@ export default function CapturePage() {
 
     const newItems: UploadItem[] = await Promise.all(
       files.map(async (file) => {
-        const previewUrl = URL.createObjectURL(file);
+        const pdf = isPdfFile(file);
+        const base = {
+          id: uid(),
+          fileName: file.name,
+          draft: null,
+        };
         try {
-          const payload = await fileToScaledBase64(file);
+          if (pdf) {
+            if (file.size > MAX_PDF_BYTES) {
+              throw new Error(
+                `PDFが大きすぎます（3MBまで）。分割または圧縮してください。`,
+              );
+            }
+            const base64 = await fileToBase64(file);
+            return {
+              ...base,
+              previewUrl: null, // PDFはサムネイル表示しない
+              payload: { base64, mediaType: "application/pdf" },
+              status: "pending" as ItemStatus,
+              error: null,
+            };
+          }
           return {
-            id: uid(),
-            fileName: file.name,
-            previewUrl,
-            payload,
+            ...base,
+            previewUrl: URL.createObjectURL(file),
+            payload: await fileToScaledBase64(file),
             status: "pending" as ItemStatus,
             error: null,
-            draft: null,
           };
         } catch (err) {
           return {
-            id: uid(),
-            fileName: file.name,
-            previewUrl,
+            ...base,
+            previewUrl: pdf ? null : URL.createObjectURL(file),
             payload: null,
             status: "error" as ItemStatus,
-            error: errMsg(err, "画像の処理に失敗しました。"),
-            draft: null,
+            error: errMsg(err, "ファイルの処理に失敗しました。"),
           };
         }
       }),
@@ -262,7 +297,7 @@ export default function CapturePage() {
     <div>
       <h1>通知表を撮影して評定を登録</h1>
       <p className="subtitle">
-        校舎を選び、通知表の写真を複数まとめてアップロードできます。AIが各画像から10科目の評定を読み取ります。
+        校舎を選び、通知表の画像・PDFを複数まとめてアップロードできます。AIが各ファイルから10科目の評定を読み取ります。
       </p>
 
       <div className="card">
@@ -283,13 +318,13 @@ export default function CapturePage() {
         </div>
 
         <label htmlFor="photo">
-          ② 通知表の写真（撮影 / 既存写真・複数選択可）
+          ② 通知表の画像・PDF（撮影 / 既存ファイル・複数選択可）
         </label>
         <input
           id="photo"
           ref={fileInputRef}
           type="file"
-          accept="image/*"
+          accept="image/*,application/pdf"
           multiple
           disabled={!campus}
           onChange={handleFiles}
@@ -300,7 +335,7 @@ export default function CapturePage() {
           </p>
         ) : (
           <p className="muted" style={{ marginTop: 4 }}>
-            複数枚まとめて選択できます。追加で選ぶと末尾に足されます。
+            画像・PDFを複数まとめて選択できます（PDFは3MBまで）。追加で選ぶと末尾に足されます。
           </p>
         )}
       </div>
@@ -364,8 +399,12 @@ export default function CapturePage() {
           {items.map((it, index) => (
             <div className="card" key={it.id}>
               <div className="item-head">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={it.previewUrl} alt="" className="thumb" />
+                {it.previewUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={it.previewUrl} alt="" className="thumb" />
+                ) : (
+                  <div className="thumb thumb-pdf">PDF</div>
+                )}
                 <div style={{ flex: 1 }}>
                   <div className="item-title">
                     {index + 1}. {it.fileName}
