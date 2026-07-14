@@ -1,5 +1,6 @@
 "use client";
 
+import { PDFDocument } from "pdf-lib";
 import Link from "next/link";
 import { useRef, useState } from "react";
 import { CAMPUSES } from "@/lib/campuses";
@@ -56,17 +57,61 @@ function isPdfFile(file: File): boolean {
   return file.type === "application/pdf" || /\.pdf$/i.test(file.name);
 }
 
-/** ファイルを base64 文字列として読み込む（PDF など無加工で送る用） */
-async function fileToBase64(file: File): Promise<string> {
+/** Blob を base64 文字列として読み込む（大きなデータでも安全） */
+async function blobToBase64(blob: Blob): Promise<string> {
   const dataUrl = await new Promise<string>((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result as string);
     reader.onerror = () => reject(new Error("ファイルの読み込みに失敗しました。"));
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(blob);
   });
   const base64 = dataUrl.split(",")[1] ?? "";
   if (!base64) throw new Error("ファイルを読み込めませんでした。");
   return base64;
+}
+
+/**
+ * 複数ページ PDF を 1 ページずつの PDF に分割し、各ページを payload 化する。
+ * これにより 1 ページ = 1 通知表 として解析でき、Vercel のリクエスト
+ * 上限（4.5MB）も回避できる（送るのは常に 1 ページ分だけ）。
+ */
+async function splitPdfToPayloads(
+  file: File,
+): Promise<{ base64: string; pageLabel: string; error?: string }[]> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const src = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  const total = src.getPageCount();
+  const results: { base64: string; pageLabel: string; error?: string }[] = [];
+
+  for (let i = 0; i < total; i++) {
+    const label = total > 1 ? `${file.name}（p${i + 1}/${total}）` : file.name;
+    try {
+      const out = await PDFDocument.create();
+      const [page] = await out.copyPages(src, [i]);
+      out.addPage(page);
+      const outBytes = await out.save();
+      if (outBytes.length > MAX_PDF_BYTES) {
+        results.push({
+          base64: "",
+          pageLabel: label,
+          error: "このページのPDFが大きすぎます（3MB超）。",
+        });
+        continue;
+      }
+      const blob = new Blob([outBytes as unknown as BlobPart], {
+        type: "application/pdf",
+      });
+      const base64 = await blobToBase64(blob);
+      results.push({ base64, pageLabel: label });
+    } catch (err) {
+      results.push({
+        base64: "",
+        pageLabel: label,
+        error: errMsg(err, "このページを処理できませんでした。"),
+      });
+    }
+  }
+  return results;
 }
 
 /** 画像を最大辺 maxEdge px に縮小し、{ base64, mediaType } を返す */
@@ -146,6 +191,9 @@ export default function CapturePage() {
   const [items, setItems] = useState<UploadItem[]>([]);
   const [running, setRunning] = useState(false);
   const [savedCount, setSavedCount] = useState<number | null>(null);
+  const [logStatus, setLogStatus] = useState<
+    "idle" | "sending" | "sent" | "skipped" | "failed"
+  >("idle");
 
   const doneCount = items.filter((it) => it.status === "done").length;
   const analyzableCount = items.filter(
@@ -157,48 +205,83 @@ export default function CapturePage() {
     if (files.length === 0) return;
     setSavedCount(null);
 
-    const newItems: UploadItem[] = await Promise.all(
+    // 1 ファイルから複数アイテム（PDFの各ページ）が生じ得るため配列を平坦化
+    const perFile: UploadItem[][] = await Promise.all(
       files.map(async (file) => {
-        const pdf = isPdfFile(file);
-        const base = {
-          id: uid(),
-          fileName: file.name,
-          draft: null,
-        };
+        if (isPdfFile(file)) {
+          // 複数ページPDF → 1ページずつのアイテムに分割
+          try {
+            const pages = await splitPdfToPayloads(file);
+            return pages.map((p) =>
+              p.error
+                ? {
+                    id: uid(),
+                    fileName: p.pageLabel,
+                    previewUrl: null,
+                    payload: null,
+                    status: "error" as ItemStatus,
+                    error: p.error,
+                    draft: null,
+                  }
+                : {
+                    id: uid(),
+                    fileName: p.pageLabel,
+                    previewUrl: null,
+                    payload: {
+                      base64: p.base64,
+                      mediaType: "application/pdf",
+                    },
+                    status: "pending" as ItemStatus,
+                    error: null,
+                    draft: null,
+                  },
+            );
+          } catch (err) {
+            return [
+              {
+                id: uid(),
+                fileName: file.name,
+                previewUrl: null,
+                payload: null,
+                status: "error" as ItemStatus,
+                error: errMsg(
+                  err,
+                  "PDFを読み込めませんでした（暗号化・破損の可能性）。",
+                ),
+                draft: null,
+              },
+            ];
+          }
+        }
+        // 画像 → 縮小して 1 アイテム
         try {
-          if (pdf) {
-            if (file.size > MAX_PDF_BYTES) {
-              throw new Error(
-                `PDFが大きすぎます（3MBまで）。分割または圧縮してください。`,
-              );
-            }
-            const base64 = await fileToBase64(file);
-            return {
-              ...base,
-              previewUrl: null, // PDFはサムネイル表示しない
-              payload: { base64, mediaType: "application/pdf" },
+          return [
+            {
+              id: uid(),
+              fileName: file.name,
+              previewUrl: URL.createObjectURL(file),
+              payload: await fileToScaledBase64(file),
               status: "pending" as ItemStatus,
               error: null,
-            };
-          }
-          return {
-            ...base,
-            previewUrl: URL.createObjectURL(file),
-            payload: await fileToScaledBase64(file),
-            status: "pending" as ItemStatus,
-            error: null,
-          };
+              draft: null,
+            },
+          ];
         } catch (err) {
-          return {
-            ...base,
-            previewUrl: pdf ? null : URL.createObjectURL(file),
-            payload: null,
-            status: "error" as ItemStatus,
-            error: errMsg(err, "ファイルの処理に失敗しました。"),
-          };
+          return [
+            {
+              id: uid(),
+              fileName: file.name,
+              previewUrl: URL.createObjectURL(file),
+              payload: null,
+              status: "error" as ItemStatus,
+              error: errMsg(err, "ファイルの処理に失敗しました。"),
+              draft: null,
+            },
+          ];
         }
       }),
     );
+    const newItems = perFile.flat();
     setItems((prev) => [...prev, ...newItems]);
     // 同じファイルを選び直せるよう値をクリア
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -278,9 +361,20 @@ export default function CapturePage() {
     setSavedCount(null);
   }
 
-  function saveAll() {
+  async function saveAll() {
     if (!campus) return;
     const toSave = items.filter((it) => it.status === "done" && it.draft);
+
+    // localStorage 保存 ＆ ログ用の行を組み立て
+    const rows: {
+      savedAt: string;
+      campus: string;
+      fileName: string;
+      studentName: string | null;
+      schoolYear: string | null;
+      term: string | null;
+      ratings: Ratings;
+    }[] = [];
     for (const it of toSave) {
       const ratings = {} as Ratings;
       for (const s of SUBJECTS) {
@@ -288,9 +382,38 @@ export default function CapturePage() {
         ratings[s.key] = v === "" ? null : v;
       }
       addRecord({ ...it.draft!, ratings }, campus);
+      rows.push({
+        savedAt: new Date().toISOString(),
+        campus,
+        fileName: it.fileName,
+        studentName: it.draft!.studentName,
+        schoolYear: it.draft!.schoolYear,
+        term: it.draft!.term,
+        ratings,
+      });
     }
-    setSavedCount(toSave.length);
+    setSavedCount(rows.length);
     setItems([]);
+
+    // GAS スプレッドシートへログ送信（保存はローカルで完了済み。送信はベストエフォート）
+    if (rows.length === 0) {
+      setLogStatus("idle");
+      return;
+    }
+    setLogStatus("sending");
+    try {
+      const res = await fetch("/api/log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rows }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (data.skipped) setLogStatus("skipped");
+      else if (res.ok && data.ok) setLogStatus("sent");
+      else setLogStatus("failed");
+    } catch {
+      setLogStatus("failed");
+    }
   }
 
   return (
@@ -335,7 +458,7 @@ export default function CapturePage() {
           </p>
         ) : (
           <p className="muted" style={{ marginTop: 4 }}>
-            画像・PDFを複数まとめて選択できます（PDFは3MBまで）。追加で選ぶと末尾に足されます。
+            画像・PDFを複数まとめて選択できます。複数ページのPDFは自動で1ページずつに分割し、各ページを1通知表として解析します（1ページ3MBまで）。
           </p>
         )}
       </div>
@@ -348,6 +471,16 @@ export default function CapturePage() {
           <p style={{ margin: 0, color: "var(--success)", fontWeight: 600 }}>
             ✓ {savedCount}件を保存しました（校舎: {campus}）。
           </p>
+          {logStatus !== "idle" && (
+            <p className="muted" style={{ margin: "4px 0 0" }}>
+              {logStatus === "sending" && "スプレッドシートへ記録中…"}
+              {logStatus === "sent" && "✓ スプレッドシートに記録しました。"}
+              {logStatus === "skipped" &&
+                "（スプレッドシート連携は未設定のため記録をスキップしました）"}
+              {logStatus === "failed" &&
+                "スプレッドシートへの記録に失敗しました（ローカル保存は完了しています）。"}
+            </p>
+          )}
           <div className="btn-row">
             <Link className="btn" href="/dashboard">
               集計を見る
