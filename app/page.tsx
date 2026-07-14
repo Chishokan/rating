@@ -637,8 +637,8 @@ export default function CapturePage() {
       )}
 
       <p className="muted">
-        データはこの端末のブラウザ内（localStorage）にのみ保存されます。
-        <Link href="/dashboard"> 集計・CSV出力ページへ →</Link>
+        データはこの端末のブラウザ内（localStorage）に保存され、連携設定時はGoogleスプレッドシートにも記録されます。
+        <Link href="/dashboard"> 集計ページへ →</Link>
       </p>
     </div>
   );

@@ -90,37 +90,3 @@ export function computeStats(records: ReportRecord[]): Stats {
   };
 }
 
-/** CSV セルのエスケープ（カンマ・改行・引用符を含む場合はダブルクオートで囲む） */
-export function csvCell(value: string): string {
-  if (/[",\n]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
-  }
-  return value;
-}
-
-/** CSV のヘッダ列（保存日時/校舎/氏名/学年/学期 ＋ 10 科目） */
-export const CSV_HEADER = [
-  "保存日時",
-  "校舎",
-  "氏名",
-  "学年",
-  "学期",
-  ...SUBJECTS.map((s) => s.label),
-];
-
-/** レコードから CSV 文字列（ヘッダ付き・CRLF 改行・横持ち）を生成する */
-export function buildCsv(records: ReportRecord[]): string {
-  const lines = [CSV_HEADER.map(csvCell).join(",")];
-  for (const row of toRows(records)) {
-    const cells = [
-      formatDate(row.createdAt),
-      row.campus,
-      row.studentName,
-      row.schoolYear,
-      row.term,
-      ...SUBJECTS.map((s) => row.ratings[s.key]),
-    ];
-    lines.push(cells.map(csvCell).join(","));
-  }
-  return lines.join("\r\n");
-}

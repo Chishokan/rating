@@ -1,16 +1,9 @@
-// 集計・CSV ロジックのユニットテスト（横持ち・10科目固定列）。
-// 実行: npm test  (Node 22 のネイティブ TypeScript 実行を利用)
+// 集計ロジックのユニットテスト（横持ち・10科目固定列）。
+// 実行: npm test  (tsx で TypeScript を実行)
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  CSV_HEADER,
-  buildCsv,
-  computeStats,
-  csvCell,
-  formatDate,
-  toRows,
-} from "../lib/aggregate.ts";
+import { computeStats, formatDate, toRows } from "../lib/aggregate.ts";
 import type { Ratings } from "../lib/types.ts";
 import type { ReportRecord } from "../lib/types.ts";
 
@@ -64,26 +57,6 @@ const records: ReportRecord[] = [
   },
 ];
 
-test("CSV_HEADER: 校舎を含む15列", () => {
-  assert.deepEqual(CSV_HEADER, [
-    "保存日時",
-    "校舎",
-    "氏名",
-    "学年",
-    "学期",
-    "国語",
-    "英語",
-    "数学",
-    "理科",
-    "社会",
-    "音楽",
-    "美術",
-    "保体",
-    "家庭科",
-    "技術",
-  ]);
-});
-
 test("toRows: 1通知表=1行、空欄は空文字に正規化", () => {
   const rows = toRows(records);
   assert.equal(rows.length, 2);
@@ -120,29 +93,6 @@ test("computeStats: 数値評定が無いと平均は null", () => {
     },
   ];
   assert.equal(computeStats(onlyLetters).avg, null);
-});
-
-test("buildCsv: ヘッダ + 1行=1通知表、空欄は空セル", () => {
-  const csv = buildCsv(records);
-  const lines = csv.split("\r\n");
-  assert.equal(
-    lines[0],
-    "保存日時,校舎,氏名,学年,学期,国語,英語,数学,理科,社会,音楽,美術,保体,家庭科,技術",
-  );
-  assert.equal(lines.length, 3); // ヘッダ + 2件
-  // 2人目: 校舎=日宇校・国語5・美術A 以外は空欄。日時はTZ依存のため先頭列を除いて検証
-  const fields = lines[2].split(",");
-  assert.equal(
-    fields.slice(1).join(","),
-    "日宇校,佐藤 花子,中学2年,1学期,5,,,,,,A,,,",
-  );
-});
-
-test("csvCell: カンマ・引用符・改行をエスケープ", () => {
-  assert.equal(csvCell("5"), "5");
-  assert.equal(csvCell("中学2年"), "中学2年");
-  assert.equal(csvCell("山田, 太郎"), '"山田, 太郎"');
-  assert.equal(csvCell('A"評価'), '"A""評価"');
 });
 
 test("formatDate: ISO整形 / 不正値はそのまま", () => {

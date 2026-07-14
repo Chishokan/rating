@@ -26,7 +26,8 @@ export default function RootLayout({
           </Link>
           <nav className="nav">
             <Link href="/">撮影・登録</Link>
-            <Link href="/dashboard">集計・CSV</Link>
+            <Link href="/dashboard">集計</Link>
+            <Link href="/guide">使い方</Link>
           </nav>
         </header>
         <main className="container">{children}</main>

@@ -2,25 +2,11 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { buildCsv, computeStats, formatDate, toRows } from "@/lib/aggregate";
+import { computeStats, formatDate, toRows } from "@/lib/aggregate";
 import { CAMPUSES } from "@/lib/campuses";
 import { SUBJECTS } from "@/lib/subjects";
 import { clearRecords, deleteRecord, loadRecords } from "@/lib/storage";
 import type { ReportRecord } from "@/lib/types";
-
-function downloadCsv(csv: string): void {
-  // Excel で文字化けしないよう BOM 付き UTF-8 で出力
-  const blob = new Blob(["﻿" + csv], {
-    type: "text/csv;charset=utf-8;",
-  });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  const stamp = new Date().toISOString().slice(0, 10);
-  a.download = `通知表集計_${stamp}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
 
 export default function DashboardPage() {
   const [records, setRecords] = useState<ReportRecord[]>([]);
@@ -77,7 +63,7 @@ export default function DashboardPage() {
     <div>
       <h1>評定の集計</h1>
       <p className="subtitle">
-        登録した通知表の評定を校舎ごとに集計します。CSVに書き出せばスプレッドシートで開けます。
+        登録した通知表の評定を校舎ごとに集計します。保存した内容はGoogleスプレッドシートにも自動記録されます（連携設定時）。
       </p>
 
       <div className="card">
@@ -144,14 +130,7 @@ export default function DashboardPage() {
             </table>
 
             <div className="btn-row">
-              <button
-                className="btn"
-                onClick={() => downloadCsv(buildCsv(filtered))}
-              >
-                ⬇ CSVをダウンロード
-                {campusFilter ? `（${campusFilter}）` : "（全校舎）"}
-              </button>
-              <Link className="btn btn-secondary" href="/">
+              <Link className="btn" href="/">
                 ＋ 続けて登録
               </Link>
               <button className="btn btn-danger" onClick={handleClearAll}>
