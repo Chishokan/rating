@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 // GAS へのサーバー間 POST（ブラウザからの CORS を避け、URL も秘匿する）
 export const runtime = "nodejs";
-export const maxDuration = 30;
+export const maxDuration = 60;
 
 export async function POST(request: Request) {
   const url = process.env.GAS_LOG_URL;

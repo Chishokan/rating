@@ -45,17 +45,10 @@ export default function GuidePage() {
             </span>
           </li>
           <li>
-            <strong>「まとめて保存」する</strong>
+            <strong>「保存」する</strong>
             <br />
             <span className="muted">
-              解析済みの全件を選択中の校舎で保存します。連携設定時はGoogleスプレッドシートにも自動記録されます。
-            </span>
-          </li>
-          <li>
-            <strong>「集計」タブで確認する</strong>
-            <br />
-            <span className="muted">
-              校舎で絞り込み、登録枚数・評定の平均・分布・明細を確認できます。
+              解析済みの全件を選択中の校舎で保存します。Googleスプレッドシートに評定が記録され、元ファイル（画像・PDF）は指定のDriveフォルダに保存されます。
             </span>
           </li>
         </ol>
@@ -115,8 +108,8 @@ export default function GuidePage() {
           </li>
           <li>
             <strong>保存先:</strong>
-            データはこの端末のブラウザ内に保存されます。別の端末とは共有されません。
-            Googleスプレッドシート連携を設定すると、保存時にシートへ自動記録されます。
+            保存すると、評定データはGoogleスプレッドシートに、元ファイルは指定のDriveフォルダに保存されます。
+            自分がアップロードした分だけを扱い、他の人のデータは画面に表示されません。
           </li>
           <li>
             <strong>エラーが出たら:</strong>
@@ -128,9 +121,6 @@ export default function GuidePage() {
       <div className="btn-row">
         <Link className="btn" href="/">
           撮影・登録を始める
-        </Link>
-        <Link className="btn btn-secondary" href="/dashboard">
-          集計を見る
         </Link>
       </div>
     </div>

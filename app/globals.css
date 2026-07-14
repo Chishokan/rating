@@ -54,6 +54,30 @@ body {
   font-weight: 600;
 }
 
+.nav-guide {
+  background: var(--primary);
+  color: #fff !important;
+  padding: 6px 14px;
+  border-radius: 999px;
+}
+
+.guide-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  padding: 12px 16px;
+  margin-bottom: 20px;
+}
+
+.guide-banner a {
+  white-space: nowrap;
+}
+
 .container {
   max-width: 880px;
   margin: 0 auto;

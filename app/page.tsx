@@ -4,8 +4,8 @@ import { PDFDocument } from "pdf-lib";
 import Link from "next/link";
 import { useRef, useState } from "react";
 import { CAMPUSES } from "@/lib/campuses";
+import { buildDriveFileName } from "@/lib/filename";
 import { SUBJECTS, type SubjectKey } from "@/lib/subjects";
-import { addRecord } from "@/lib/storage";
 import type { ExtractedReportCard, ExtractRequest, Ratings } from "@/lib/types";
 
 type ItemStatus = "pending" | "processing" | "done" | "error";
@@ -44,7 +44,10 @@ function errMsg(err: unknown, fallback: string): string {
 }
 
 /** 同時に解析する最大数（429 を避けつつ高速化） */
-const CONCURRENCY = 4;
+const CONCURRENCY = 6;
+
+/** 同時に保存送信する最大数（GAS への負荷を抑える） */
+const SAVE_CONCURRENCY = 3;
 
 /** PDF の最大サイズ（Vercel のリクエスト上限 4.5MB 以内に収めるため） */
 const MAX_PDF_BYTES = 3 * 1024 * 1024;
@@ -190,10 +193,11 @@ export default function CapturePage() {
   const [campus, setCampus] = useState<string>("");
   const [items, setItems] = useState<UploadItem[]>([]);
   const [running, setRunning] = useState(false);
-  const [savedCount, setSavedCount] = useState<number | null>(null);
-  const [logStatus, setLogStatus] = useState<
-    "idle" | "sending" | "sent" | "skipped" | "failed"
-  >("idle");
+  const [saving, setSaving] = useState(false);
+  const [saveResult, setSaveResult] = useState<
+    | { sent: number; failed: number; unconfigured: boolean }
+    | null
+  >(null);
 
   const doneCount = items.filter((it) => it.status === "done").length;
   const analyzableCount = items.filter(
@@ -203,7 +207,7 @@ export default function CapturePage() {
   async function handleFiles(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
     if (files.length === 0) return;
-    setSavedCount(null);
+    setSaveResult(null);
 
     // 1 ファイルから複数アイテム（PDFの各ページ）が生じ得るため配列を平坦化
     const perFile: UploadItem[][] = await Promise.all(
@@ -309,7 +313,7 @@ export default function CapturePage() {
 
   async function analyzeAll() {
     setRunning(true);
-    setSavedCount(null);
+    setSaveResult(null);
     // 呼び出し時点のスナップショットから対象を決定
     const targets = items.filter(
       (it) => it.payload && it.status !== "done" && it.status !== "processing",
@@ -358,62 +362,88 @@ export default function CapturePage() {
     if (items.length > 0 && !window.confirm("選択中の画像をすべて取り消しますか？"))
       return;
     setItems([]);
-    setSavedCount(null);
+    setSaveResult(null);
   }
 
-  async function saveAll() {
-    if (!campus) return;
-    const toSave = items.filter((it) => it.status === "done" && it.draft);
-
-    // localStorage 保存 ＆ ログ用の行を組み立て
-    const rows: {
-      savedAt: string;
-      campus: string;
-      fileName: string;
-      studentName: string | null;
-      schoolYear: string | null;
-      term: string | null;
-      ratings: Ratings;
-    }[] = [];
-    for (const it of toSave) {
-      const ratings = {} as Ratings;
-      for (const s of SUBJECTS) {
-        const v = (it.draft!.ratings[s.key] ?? "").trim();
-        ratings[s.key] = v === "" ? null : v;
-      }
-      addRecord({ ...it.draft!, ratings }, campus);
-      rows.push({
+  // 1件を GAS へ送信（スプレッドシート追記＋Driveへファイル保存）。
+  // 戻り値: "sent" 成功 / "failed" 失敗 / "unconfigured" 連携未設定
+  async function sendOne(
+    it: UploadItem,
+  ): Promise<"sent" | "failed" | "unconfigured"> {
+    const draft = it.draft!;
+    const ratings = {} as Ratings;
+    for (const s of SUBJECTS) {
+      const v = (draft.ratings[s.key] ?? "").trim();
+      ratings[s.key] = v === "" ? null : v;
+    }
+    const mime = it.payload?.mediaType ?? "image/jpeg";
+    const body = {
+      row: {
         savedAt: new Date().toISOString(),
         campus,
         fileName: it.fileName,
-        studentName: it.draft!.studentName,
-        schoolYear: it.draft!.schoolYear,
-        term: it.draft!.term,
+        studentName: draft.studentName,
+        schoolYear: draft.schoolYear,
+        term: draft.term,
         ratings,
-      });
-    }
-    setSavedCount(rows.length);
-    setItems([]);
-
-    // GAS スプレッドシートへログ送信（保存はローカルで完了済み。送信はベストエフォート）
-    if (rows.length === 0) {
-      setLogStatus("idle");
-      return;
-    }
-    setLogStatus("sending");
+      },
+      file: it.payload
+        ? {
+            name: buildDriveFileName(campus, draft.studentName, mime, new Date()),
+            mimeType: mime,
+            base64: it.payload.base64,
+          }
+        : undefined,
+    };
     try {
       const res = await fetch("/api/log", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rows }),
+        body: JSON.stringify(body),
       });
       const data = await res.json().catch(() => ({}));
-      if (data.skipped) setLogStatus("skipped");
-      else if (res.ok && data.ok) setLogStatus("sent");
-      else setLogStatus("failed");
+      if (data.skipped) return "unconfigured";
+      return res.ok && data.ok ? "sent" : "failed";
     } catch {
-      setLogStatus("failed");
+      return "failed";
     }
+  }
+
+  async function saveAll() {
+    if (!campus || saving) return;
+    const targets = items.filter(
+      (it) => it.status === "done" && it.draft && it.payload,
+    );
+    if (targets.length === 0) return;
+
+    setSaving(true);
+    setSaveResult(null);
+
+    // 同時送信数を制限したワーカープール
+    const outcomes = new Map<string, "sent" | "failed" | "unconfigured">();
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < targets.length) {
+        const it = targets[cursor++];
+        outcomes.set(it.id, await sendOne(it));
+      }
+    };
+    await Promise.all(
+      Array.from({ length: Math.min(SAVE_CONCURRENCY, targets.length) }, () =>
+        worker(),
+      ),
+    );
+
+    const sent = [...outcomes.values()].filter((v) => v === "sent").length;
+    const failed = [...outcomes.values()].filter((v) => v === "failed").length;
+    const unconfigured = [...outcomes.values()].some(
+      (v) => v === "unconfigured",
+    );
+
+    // 成功したものだけ一覧から除去（失敗・未設定は残して再送信できるように）
+    setItems((prev) => prev.filter((it) => outcomes.get(it.id) !== "sent"));
+    setSaveResult({ sent, failed, unconfigured });
+    setSaving(false);
   }
 
   return (
@@ -422,6 +452,13 @@ export default function CapturePage() {
       <p className="subtitle">
         校舎を選び、通知表の画像・PDFを複数まとめてアップロードできます。AIが各ファイルから10科目の評定を読み取ります。
       </p>
+
+      <div className="guide-banner">
+        <span>📖 はじめての方は、操作手順をご覧ください。</span>
+        <Link className="btn btn-secondary" href="/guide">
+          使い方を見る
+        </Link>
+      </div>
 
       <div className="card">
         <div className="field">
@@ -463,29 +500,31 @@ export default function CapturePage() {
         )}
       </div>
 
-      {savedCount !== null && (
+      {saveResult !== null && (
         <div
           className="card"
-          style={{ borderColor: "#bbf7d0", background: "#f0fdf4" }}
+          style={
+            saveResult.failed > 0 || saveResult.unconfigured
+              ? { borderColor: "#fecaca", background: "#fef2f2" }
+              : { borderColor: "#bbf7d0", background: "#f0fdf4" }
+          }
         >
-          <p style={{ margin: 0, color: "var(--success)", fontWeight: 600 }}>
-            ✓ {savedCount}件を保存しました（校舎: {campus}）。
-          </p>
-          {logStatus !== "idle" && (
-            <p className="muted" style={{ margin: "4px 0 0" }}>
-              {logStatus === "sending" && "スプレッドシートへ記録中…"}
-              {logStatus === "sent" && "✓ スプレッドシートに記録しました。"}
-              {logStatus === "skipped" &&
-                "（スプレッドシート連携は未設定のため記録をスキップしました）"}
-              {logStatus === "failed" &&
-                "スプレッドシートへの記録に失敗しました（ローカル保存は完了しています）。"}
+          {saveResult.sent > 0 && (
+            <p style={{ margin: 0, color: "var(--success)", fontWeight: 600 }}>
+              ✓ {saveResult.sent}件をスプレッドシートとDriveに保存しました（校舎:{" "}
+              {campus}）。
             </p>
           )}
-          <div className="btn-row">
-            <Link className="btn" href="/dashboard">
-              集計を見る
-            </Link>
-          </div>
+          {saveResult.unconfigured && (
+            <p style={{ margin: "4px 0 0", color: "var(--danger)" }}>
+              保存先（スプレッドシート連携）が未設定のため保存できませんでした。管理者にお問い合わせください。
+            </p>
+          )}
+          {saveResult.failed > 0 && (
+            <p style={{ margin: "4px 0 0", color: "var(--danger)" }}>
+              {saveResult.failed}件の保存に失敗しました。下の一覧に残っているので「まとめて保存」で再送信してください。
+            </p>
+          )}
         </div>
       )}
 
@@ -496,7 +535,7 @@ export default function CapturePage() {
               <button
                 className="btn"
                 onClick={analyzeAll}
-                disabled={running || analyzableCount === 0}
+                disabled={running || saving || analyzableCount === 0}
               >
                 {running ? (
                   <>
@@ -509,12 +548,12 @@ export default function CapturePage() {
               <button
                 className="btn btn-secondary"
                 onClick={clearAll}
-                disabled={running}
+                disabled={running || saving}
               >
                 すべてクリア
               </button>
               <span className="muted">
-                {items.length}件中 {doneCount}件 解析済み（最大{CONCURRENCY}件並列）
+                {items.length}件中 {doneCount}件 解析済み（最大{CONCURRENCY}件並列・枚数制限なし）
               </span>
             </div>
 
@@ -522,9 +561,15 @@ export default function CapturePage() {
               <button
                 className="btn"
                 onClick={saveAll}
-                disabled={running || doneCount === 0 || !campus}
+                disabled={running || saving || doneCount === 0 || !campus}
               >
-                ④ 解析済み {doneCount}件をまとめて保存
+                {saving ? (
+                  <>
+                    <span className="spinner" /> 保存中…
+                  </>
+                ) : (
+                  `④ 解析済み ${doneCount}件を保存（スプレッドシート＋Drive）`
+                )}
               </button>
             </div>
           </div>
@@ -552,7 +597,7 @@ export default function CapturePage() {
                       className="remove-link"
                       style={{ color: "var(--primary)" }}
                       onClick={() => analyzeOne(it.id, it.payload)}
-                      disabled={running}
+                      disabled={running || saving}
                     >
                       {it.status === "done" ? "再解析" : "解析"}
                     </button>
@@ -560,7 +605,7 @@ export default function CapturePage() {
                   <button
                     className="remove-link"
                     onClick={() => removeItem(it.id)}
-                    disabled={running}
+                    disabled={running || saving}
                   >
                     削除
                   </button>
@@ -637,8 +682,8 @@ export default function CapturePage() {
       )}
 
       <p className="muted">
-        データはこの端末のブラウザ内（localStorage）に保存され、連携設定時はGoogleスプレッドシートにも記録されます。
-        <Link href="/dashboard"> 集計ページへ →</Link>
+        保存すると、Googleスプレッドシートへの記録と、指定Driveフォルダへのファイル保存が行われます（連携設定が必要です）。
+        <Link href="/guide"> 使い方を見る →</Link>
       </p>
     </div>
   );
